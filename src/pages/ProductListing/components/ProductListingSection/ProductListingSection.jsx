@@ -1,6 +1,7 @@
 import "./ProductListingSection.css";
 import Tilt from "react-parallax-tilt";
-import React from "react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
+import { useInView } from "react-intersection-observer";
 
 import { useData } from "../../../../contexts/DataProvider.js";
 import { Link } from "react-router-dom";
@@ -14,6 +15,8 @@ import { AiTwotoneHeart } from "react-icons/ai";
 import { useUserData } from "../../../../contexts/UserDataProvider.js";
 
 import { BsFillStarFill } from "react-icons/bs";
+
+const ProductCard = lazy(() => import("../ProductCard/ProductCard"));
 
 export const ProductListingSection = () => {
   const { state } = useData();
@@ -31,106 +34,72 @@ export const ProductListingSection = () => {
     filters: { rating, categories, price, sort },
   } = state;
 
-  const searchedProducts = getSearchedProducts(allProductsFromApi, inputSearch);
+  // Apply filters efficiently with memoization
+  const [filteredProducts, setFilteredProducts] = useState([]);
+  const [visibleProducts, setVisibleProducts] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const productsPerPage = 8;
 
-  const ratedProducts = getRatedProducts(searchedProducts, rating);
+  // Implement intersection observer for infinite scrolling
+  const { ref, inView } = useInView({
+    threshold: 0.1,
+    triggerOnce: false,
+  });
 
-  const categoryProducts = getCategoryWiseProducts(ratedProducts, categories);
+  // Apply all filters and sorting in one pass
+  useEffect(() => {
+    const filtered = getSearchedProducts(allProductsFromApi, inputSearch);
+    const withRating = getRatedProducts(filtered, rating);
+    const withCategory = getCategoryWiseProducts(withRating, categories);
+    const withPrice = getPricedProducts(withCategory, price);
+    const sorted = getSortedProducts(withPrice, sort);
+    
+    setFilteredProducts(sorted);
+    setCurrentPage(1);
+    setVisibleProducts(sorted.slice(0, productsPerPage));
+  }, [allProductsFromApi, inputSearch, rating, categories, price, sort]);
 
-  const pricedProducts = getPricedProducts(categoryProducts, price);
-
-  const sortedProducts = getSortedProducts(pricedProducts, sort);
+  // Load more products when user scrolls to the bottom
+  useEffect(() => {
+    if (inView) {
+      const nextPage = currentPage + 1;
+      const startIndex = (nextPage - 1) * productsPerPage;
+      const endIndex = nextPage * productsPerPage;
+      
+      if (startIndex < filteredProducts.length) {
+        setVisibleProducts(prev => [...prev, ...filteredProducts.slice(startIndex, endIndex)]);
+        setCurrentPage(nextPage);
+      }
+    }
+  }, [inView, currentPage, filteredProducts]);
 
   return (
     <div className="product-card-container">
-      {!sortedProducts.length ? (
+      {!filteredProducts.length ? (
         <h2 className="no-products-found">
           Sorry, there are no matching products!
         </h2>
       ) : (
-        sortedProducts.map((product) => {
-          const {
-            _id,
-            id,
-            name,
-            original_price,
-            discounted_price,
-            category_name,
-            is_stock,
-            rating,
-            reviews,
-            trending,
-            img,
-          } = product;
-
-          return (
-            <Tilt
-              key={product._id}
-              tiltMaxAngleX={5}
-              tiltMaxAngleY={5}
-              glareEnable={false}
-              transitionSpeed={2000}
-              scale={1.02}
-            >
-              <div className="product-card" key={_id}>
-                <Link to={`/product-details/${id}`}>
-                  <div className="product-card-image">
-                    <Tilt
-                      transitionSpeed={2000}
-                      tiltMaxAngleX={15}
-                      tiltMaxAngleY={15}
-                      scale={1.08}
-                    >
-                      <img src={img} alt="" />
-                    </Tilt>
-                  </div>
-                </Link>
-
-                <div className="product-card-details">
-                  <h3>{name}</h3>
-                  <p className="ratings">
-                    {rating}
-                    <BsFillStarFill color="orange" /> ({reviews} reviews){" "}
-                  </p>
-                  <div className="price-container">
-                    <p className="original-price">${original_price}</p>
-                    <p className="discount-price">${discounted_price}</p>
-                  </div>
-
-                  <p>Genre: {category_name}</p>
-                  <div className="info">
-                    {!is_stock && <p className="out-of-stock">Out of stock</p>}
-                    {trending && <p className="trending">Trending</p>}
-                  </div>
-                </div>
-
-                <div className="product-card-buttons">
-                  <button
-                    disabled={cartLoading}
-                    onClick={() => addToCartHandler(product)}
-                    className="cart-btn"
-                  >
-                    {!isProductInCart(product) ? "Add To Cart" : "Go to Cart"}
-                  </button>
-                  <button
-                    onClick={() => wishlistHandler(product)}
-                    className="wishlist-btn"
-                  >
-                    {!isProductInWishlist(product) ? (
-                      <AiOutlineHeart size={30} />
-                    ) : (
-                      <AiTwotoneHeart
-                        AiTwotoneHeartFill
-                        color="red"
-                        size={30}
-                      />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </Tilt>
-          );
-        })
+        <>
+          <Suspense fallback={<div className="loading-products">Loading products...</div>}>
+            {visibleProducts.map((product) => (
+              <ProductCard
+                key={product._id}
+                product={product}
+                isProductInCart={isProductInCart}
+                isProductInWishlist={isProductInWishlist}
+                wishlistHandler={wishlistHandler}
+                addToCartHandler={addToCartHandler}
+                cartLoading={cartLoading}
+              />
+            ))}
+          </Suspense>
+          {visibleProducts.length < filteredProducts.length && (
+            <div ref={ref} className="load-more-indicator">
+              Loading more...
+            </div>
+          )}
+        </>
       )}
     </div>
   );
